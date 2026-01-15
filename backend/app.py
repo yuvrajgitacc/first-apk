@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import json
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -9,7 +12,13 @@ from datetime import datetime
 app = Flask(__name__)
 # Robust CORS for development
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///flowstate.db'
+
+# Use absolute path for SQLite in production
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'instance', 'flowstate.db')
+if not os.path.exists(os.path.join(basedir, 'instance')):
+    os.makedirs(os.path.join(basedir, 'instance'))
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'secret!'
 
