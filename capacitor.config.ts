@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     cleartext: true,
-    allowNavigation: ['10.238.71.15']
+    allowNavigation: ['flow-state-focus.onrender.com']
   }
 };
 

@@ -15,7 +15,15 @@ app.config['SECRET_KEY'] = 'secret!'
 
 db = SQLAlchemy(app)
 # SocketIO with broad CORS
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+# Initialize database
+with app.app_context():
+    db.create_all()
+    # Create default user if it doesn't exist
+    if not User.query.filter(User.username.ilike('Yuvraj')).first():
+        db.session.add(User(username='Yuvraj', daily_stats='{}'))
+        db.session.commit()
 
 # Models
 class User(db.Model):
@@ -113,11 +121,12 @@ def home():
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     data = request.json
-    if User.query.filter_by(username=data['username']).first():
+    username = data.get('username')
+    if User.query.filter_by(username=username).first():
         return jsonify({'status': 'error', 'message': 'Username already exists'}), 400
     
     user = User(
-        username=data['username'],
+        username=username,
         email=data.get('email'),
         password=data.get('password'),
         daily_stats='{}'
@@ -125,7 +134,8 @@ def register():
     try:
         db.session.add(user)
         db.session.commit()
-        return jsonify({'status': 'success', 'user': {'username': user.username}})
+        # Use our local variable 'username' instead of 'user.username' to avoid DetachedInstanceError
+        return jsonify({'status': 'success', 'user': {'username': username}})
     except Exception as e:
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -133,17 +143,20 @@ def register():
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.json
+    username_input = data.get('username')
     # Case-insensitive lookup
-    user = User.query.filter(User.username.ilike(data['username'])).first()
+    user = User.query.filter(User.username.ilike(username_input)).first()
     if user and (not user.password or user.password == data.get('password')):
+        # Extract data before returning to avoid issues with detached sessions
+        user_data = {
+            'id': user.id,
+            'username': user.username,
+            'level': user.level,
+            'xp': user.xp
+        }
         return jsonify({
             'status': 'success',
-            'user': {
-                'id': user.id,
-                'username': user.username,
-                'level': user.level,
-                'xp': user.xp
-            }
+            'user': user_data
         })
     return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
 
@@ -585,9 +598,4 @@ def get_messages():
     } for m in messages])
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        if not User.query.filter(User.username.ilike('Yuvraj')).first():
-            db.session.add(User(username='Yuvraj', daily_stats='{}'))
-            db.session.commit()
     socketio.run(app, debug=True, host='0.0.0.0', port=5000)

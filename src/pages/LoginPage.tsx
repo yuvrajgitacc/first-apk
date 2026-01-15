@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { NeuCard } from "@/components/ui/NeuCard";
 import { NeuButton } from "@/components/ui/NeuButton";
 import { Input } from "@/components/ui/input";
 import { GoogleLogin } from "@react-oauth/google";
-import { LogIn, User, Lock, Chrome } from "lucide-react";
+import { LogIn, User, Lock, Chrome, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL } from "@/lib/api";
 
@@ -17,6 +17,14 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
     const [password, setPassword] = useState("");
     const [email, setEmail] = useState("");
     const [isLoading, setIsLoading] = useState(false);
+    const [isWakingUp, setIsWakingUp] = useState(false);
+
+    // Ping the server on mount to "wake it up" early
+    useEffect(() => {
+        fetch(API_URL).catch(() => {
+            // Silence silent errors on boot
+        });
+    }, []);
 
     const handleGoogleSuccess = async (credentialResponse: any) => {
         try {
@@ -51,6 +59,11 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
         setIsLoading(true);
         const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
 
+        // If the server doesn't respond in 2 seconds, it's probably sleeping
+        const wakeUpTimer = setTimeout(() => {
+            setIsWakingUp(true);
+        }, 2000);
+
         try {
             console.log(`Connecting to: ${API_URL}${endpoint}`);
             const res = await fetch(`${API_URL}${endpoint}`, {
@@ -58,6 +71,9 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username, password, email }),
             });
+
+            clearTimeout(wakeUpTimer);
+            setIsWakingUp(false);
 
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
@@ -77,6 +93,8 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
                 toast.error(data.message || "Action failed");
             }
         } catch (err: any) {
+            clearTimeout(wakeUpTimer);
+            setIsWakingUp(false);
             console.error("Connection Error:", err);
             toast.error(err.message === "Failed to fetch"
                 ? "Cannot connect to server. Is the backend running?"
@@ -147,7 +165,12 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
                             className="w-full h-14 text-lg font-bold mt-2 shadow-lg glow-accent"
                             disabled={isLoading}
                         >
-                            {isLoading ? "Please wait..." : (mode === "login" ? "Get Started" : "Register")}
+                            {isLoading ? (
+                                <span className="flex items-center gap-2">
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                    {isWakingUp ? "Waking up server..." : "Please wait..."}
+                                </span>
+                            ) : (mode === "login" ? "Get Started" : "Register")}
                         </NeuButton>
                     </form>
 
