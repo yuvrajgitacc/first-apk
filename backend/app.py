@@ -4,6 +4,7 @@ eventlet.monkey_patch()
 import json
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import os
@@ -30,15 +31,31 @@ app.config['SECRET_KEY'] = 'secret!'
 db = SQLAlchemy(app)
 
 # Create tables in Supabase with Error Handling
-try:
-    with app.app_context():
-        db.create_all()
-        print("✅ Database tables synced successfully with Supabase!")
-except Exception as e:
-    print(f"❌ Database error during startup: {str(e)}")
+# Deferred to allow app to boot even if DB fails
+# try:
+#     with app.app_context():
+#         db.create_all()
+#         print("✅ Database tables synced successfully with Supabase!")
+# except Exception as e:
+#     print(f"❌ Database error during startup: {str(e)}")
 
 # SocketIO with broad CORS
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+@app.route('/api/health-check', methods=['GET'])
+def health_check():
+    status = {"status": "online", "db": "unknown", "error": None}
+    try:
+        # Test DB connection
+        db.session.execute(text('SELECT 1'))
+        status["db"] = "connected"
+        # Try creating tables if they don't exist
+        db.create_all()
+        status["tables"] = "synced"
+    except Exception as e:
+        status["db"] = "failed"
+        status["error"] = str(e)
+    return jsonify(status)
 
 # Models
 class User(db.Model):
