@@ -2,12 +2,15 @@ import eventlet
 eventlet.monkey_patch()
 
 import json
+import os
+import ssl
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import os
+import ssl
 from datetime import datetime
 
 app = Flask(__name__)
@@ -16,15 +19,31 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # Use absolute path for SQLite in production
 # Supabase PostgreSQL Connection
-# Using environment variable if available, otherwise using the provided string
-SUPABASE_URL = "postgresql+pg8000://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
+# pg8000 uses direct SSL context, not query params
+SUPABASE_URL = "postgresql+pg8000://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
 
+# Clean up any leftover params if they exist
+if "?" in db_url:
+    db_url = db_url.split("?")[0]
+
 # Ensure we use the correct driver in the URL
-if db_url and "postgresql://" in db_url:
+if "postgresql://" in db_url:
     db_url = db_url.replace("postgresql://", "postgresql+pg8000://")
-elif db_url and "postgres://" in db_url:
+elif "postgres://" in db_url:
     db_url = db_url.replace("postgres://", "postgresql+pg8000://")
+
+# Create SSL Context
+ssl_context = ssl.create_default_context()
+ssl_context.verify_mode = ssl.CERT_REQUIRED
+ssl_context.check_hostname = False # Supabase sometimes has hostname mismatch issues on direct IP
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "connect_args": {
+        "ssl_context": ssl_context
+    }
+}
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'secret!'
