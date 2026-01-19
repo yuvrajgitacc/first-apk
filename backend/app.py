@@ -9,11 +9,6 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import os
 from datetime import datetime
-try:
-    import psycopg2
-except ImportError:
-    # Fallback for some environments where psycopg2-binary is installed but not aliased
-    from psycopg2 import binary as psycopg2
 
 app = Flask(__name__)
 # Robust CORS for development
@@ -21,14 +16,15 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # Use absolute path for SQLite in production
 # Supabase PostgreSQL Connection
-# Adding ?sslmode=require for better compatibility with Supabase
-SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
+# Using environment variable if available, otherwise using the provided string
+SUPABASE_URL = "postgresql+pg8000://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
 
-# Fix for SQLAlchemy 1.4+ which requires 'postgresql://' instead of 'postgres://'
-if db_url and db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
-
+# Ensure we use the correct driver in the URL
+if db_url and "postgresql://" in db_url:
+    db_url = db_url.replace("postgresql://", "postgresql+pg8000://")
+elif db_url and "postgres://" in db_url:
+    db_url = db_url.replace("postgres://", "postgresql+pg8000://")
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'secret!'
