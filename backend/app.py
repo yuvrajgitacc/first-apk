@@ -11,29 +11,20 @@ from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
-# Try importing psycopg2, fallback for Render environments
-try:
-    import psycopg2
-except ImportError:
-    try:
-        from psycopg2 import binary as psycopg2
-    except ImportError:
-        pass # Let SQLAlchemy handle the missing driver error if it occurs
-
 app = Flask(__name__)
 # Robust CORS for development
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # Database Configuration
-# Primary: Supabase PostgreSQL via psycopg2 (Binary)
+# Primary: SImple Supabase URL
 SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
 
-# Fix for SQLAlchemy 1.4+ which requires 'postgresql://' instead of 'postgres://'
+# SQLAlchemy 1.4+ COMPATIBILITY FIX: 'postgres://' -> 'postgresql://'
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# Remove any lingering +pg8000 info, ensuring standard driver usage
+# Clean up any residual driver hints
 if "+pg8000" in db_url:
     db_url = db_url.replace("+pg8000", "")
 
@@ -41,11 +32,10 @@ app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'secret!'
 
-# Production-grade connection pooling
+# Standard connection pooling
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "pool_size": 5,
-    "pool_recycle": 300,
     "pool_pre_ping": True,
+    "pool_recycle": 300,
 }
 
 @app.route('/', methods=['GET'])
