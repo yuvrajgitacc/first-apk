@@ -13,40 +13,30 @@ import os
 import ssl
 from datetime import datetime
 
+import os
+from datetime import datetime
+
 app = Flask(__name__)
 # Robust CORS for development
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# Use absolute path for SQLite in production
 # Supabase PostgreSQL Connection
-# pg8000 uses direct SSL context, not query params
-SUPABASE_URL = "postgresql+pg8000://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres"
+# Using environment variable if available, otherwise using the provided string
+# Ensure ?sslmode=require is present for Supabase
+SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
 
-# Clean up any leftover params if they exist
-if "?" in db_url:
-    db_url = db_url.split("?")[0]
+# Fix for SQLAlchemy 1.4+ which requires 'postgresql://' instead of 'postgres://'
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# Ensure we use the correct driver in the URL
-if "postgresql://" in db_url:
-    db_url = db_url.replace("postgresql://", "postgresql+pg8000://")
-elif "postgres://" in db_url:
-    db_url = db_url.replace("postgres://", "postgresql+pg8000://")
-
-# Create SSL Context
-ssl_context = ssl.create_default_context()
-ssl_context.verify_mode = ssl.CERT_REQUIRED
-ssl_context.check_hostname = False # Supabase sometimes has hostname mismatch issues on direct IP
-
-app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "connect_args": {
-        "ssl_context": ssl_context
-    }
-}
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'secret!'
+
+@app.route('/', methods=['GET'])
+def root():
+    return jsonify({"status": "Backend is running", "timestamp": datetime.now().isoformat()})
 
 db = SQLAlchemy(app)
 
