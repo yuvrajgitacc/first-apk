@@ -11,42 +11,38 @@ from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
+# Try importing psycopg2, fallback for Render environments
+try:
+    import psycopg2
+except ImportError:
+    try:
+        from psycopg2 import binary as psycopg2
+    except ImportError:
+        pass # Let SQLAlchemy handle the missing driver error if it occurs
+
 app = Flask(__name__)
 # Robust CORS for development
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # Database Configuration
-# Primary: Supabase PostgreSQL via pg8000 (Pure Python Driver)
-# We use pg8000 to avoid C-binary compilation issues on Windows/Render
-SUPABASE_URL = "postgresql+pg8000://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres"
+# Primary: Supabase PostgreSQL via psycopg2 (Binary)
+SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
 
-# CRITICAL FIXES FOR PG8000:
-# 1. Remove parameters: pg8000 doesn't support 'sslmode' in URL
-if "?" in db_url:
-    db_url = db_url.split("?")[0]
+# Fix for SQLAlchemy 1.4+ which requires 'postgresql://' instead of 'postgres://'
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# 2. Ensure driver is set to pg8000
-if "postgresql://" in db_url:
-    db_url = db_url.replace("postgresql://", "postgresql+pg8000://")
-elif "postgres://" in db_url:
-    db_url = db_url.replace("postgres://", "postgresql+pg8000://")
-
-# 3. Create Permissive SSL Context
-# This fixes "CERTIFICATE_VERIFY_FAILED" errors by trusting the server without strictly checking the chain.
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
+# Remove any lingering +pg8000 info, ensuring standard driver usage
+if "+pg8000" in db_url:
+    db_url = db_url.replace("+pg8000", "")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'secret!'
 
-# Apply SSL context to engine
+# Production-grade connection pooling
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "connect_args": {
-        "ssl_context": ssl_context
-    },
     "pool_size": 5,
     "pool_recycle": 300,
     "pool_pre_ping": True,
