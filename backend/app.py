@@ -15,7 +15,7 @@ app = Flask(__name__)
 # Robust CORS for development
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# Database Configuration
+# Database Configuration - Supabase Integration Active
 # Primary: SImple Supabase URL
 SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
