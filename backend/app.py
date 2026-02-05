@@ -15,64 +15,60 @@ app = Flask(__name__)
 # Robust CORS for development
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# Database Configuration - Supabase Integration Active
-# Primary: SImple Supabase URL
+# Database Configuration
 SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
 db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
 
-# SQLAlchemy 1.4+ COMPATIBILITY FIX: 'postgres://' -> 'postgresql+pg8000://'
+# UNIVERSAL DATABASE COMPATIBILITY
+import ssl
+
+# 1. Clean and transform the URL
 if db_url:
+    # Ensure driver is pg8000 for compatibility with Python 3.13 on Render
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+pg8000://", 1)
     elif db_url.startswith("postgresql://") and "+pg8000" not in db_url:
         db_url = db_url.replace("postgresql://", "postgresql+pg8000://", 1)
-
-# Clean up any residual sslmode=require if it causes issues with pg8000, 
-# though pg8000 usually handles it via SQLAlchemy
-if "sslmode=require" not in db_url and "supabase" in db_url:
-    if "?" in db_url:
-        db_url += "&sslmode=require"
-    else:
-        db_url += "?sslmode=require"
+    
+    # 2. pg8000 crashes if 'sslmode' is in the URL. We must remove it.
+    if "sslmode=" in db_url:
+        import urllib.parse as urlparse
+        url_parts = list(urlparse.urlparse(db_url))
+        query = dict(urlparse.parse_qsl(url_parts[4]))
+        if 'sslmode' in query:
+            del query['sslmode']
+        url_parts[4] = urlparse.urlencode(query)
+        db_url = urlparse.urlunparse(url_parts)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'secret!'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-123')
 
-# Standard connection pooling
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+# 3. Robust Engine Options
+engine_options = {
     "pool_pre_ping": True,
     "pool_recycle": 300,
 }
 
-@app.route('/', methods=['GET'])
-def root():
-    return jsonify({"status": "Backend is running", "timestamp": datetime.now().isoformat()})
+# 4. Correctly Inject SSL for pg8000
+if "pg8000" in db_url:
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    engine_options["connect_args"] = {"ssl_context": ssl_context, "timeout": 30}
+
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
 db = SQLAlchemy(app)
-
-# Create tables in Supabase with Error Handling
-# Deferred to allow app to boot even if DB fails
-# try:
-#     with app.app_context():
-#         db.create_all()
-#         print("✅ Database tables synced successfully with Supabase!")
-# except Exception as e:
-#     print(f"❌ Database error during startup: {str(e)}")
-
-# SocketIO with broad CORS
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 @app.route('/api/health-check', methods=['GET'])
 def health_check():
     status = {"status": "online", "db": "unknown", "error": None}
     try:
         # Test DB connection
-        db.session.execute(text('SELECT 1'))
+        with db.engine.connect() as connection:
+            connection.execute(text('SELECT 1'))
         status["db"] = "connected"
-        # Try creating tables if they don't exist
-        db.create_all()
-        status["tables"] = "synced"
     except Exception as e:
         status["db"] = "failed"
         status["error"] = str(e)
