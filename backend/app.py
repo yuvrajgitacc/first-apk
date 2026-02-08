@@ -5,33 +5,34 @@ import json
 import os
 import ssl
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
-app = Flask(__name__)
-# Robust CORS for development
+# Initialize Flask with static folder pointing to the built frontend
+app = Flask(__name__, static_folder='../dist', static_url_path='/')
+# Robust CORS for development and production
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
+# Initialize SocketIO early to avoid NameError
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
 # Database Configuration
-SUPABASE_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
-db_url = os.environ.get("DATABASE_URL", SUPABASE_URL)
+# Use environment variable for production, fallback to hardcoded only for local/dev
+DEFAULT_DB_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
+db_url = os.environ.get("DATABASE_URL", DEFAULT_DB_URL)
 
-# UNIVERSAL DATABASE COMPATIBILITY
-import ssl
-
-# 1. Clean and transform the URL
+# Clean and transform the URL for SQLAlchemy compatibility
 if db_url:
-    # Ensure driver is pg8000 for compatibility with Python 3.13 on Render
     if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql+pg8000://", 1)
-    elif db_url.startswith("postgresql://") and "+pg8000" not in db_url:
-        db_url = db_url.replace("postgresql://", "postgresql+pg8000://", 1)
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
     
-    # 2. pg8000 crashes if 'sslmode' is in the URL. We must remove it.
-    if "sslmode=" in db_url:
+    # If the user specifically wants pg8000 or if we're on a system where psycopg2 is missing
+    # we can use +pg8000. But standard postgresql:// uses psycopg2 which is preferred.
+    # We only remove sslmode if using pg8000 as it doesn't support it in the query string.
+    if "+pg8000" in db_url and "sslmode=" in db_url:
         import urllib.parse as urlparse
         url_parts = list(urlparse.urlparse(db_url))
         query = dict(urlparse.parse_qsl(url_parts[4]))
@@ -44,18 +45,21 @@ app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-123')
 
-# 3. Robust Engine Options
+# Robust Engine Options
 engine_options = {
     "pool_pre_ping": True,
     "pool_recycle": 300,
 }
 
-# 4. Correctly Inject SSL for pg8000
-if "pg8000" in db_url:
+# Special SSL handling for pg8000 if used
+if db_url and "pg8000" in db_url:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     engine_options["connect_args"] = {"ssl_context": ssl_context, "timeout": 30}
+elif db_url and "supabase.co" in db_url and "sslmode=" not in db_url:
+    # If it's Supabase but no sslmode, ensure we at least try to enable it for psycopg2
+    app.config['SQLALCHEMY_DATABASE_URI'] += "?sslmode=require"
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
@@ -174,8 +178,6 @@ with app.app_context():
         print(f"❌ Database initialization error: {e}")
 
 # Routes
-# Removed duplicate root route
-
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -193,7 +195,6 @@ def register():
     try:
         db.session.add(user)
         db.session.commit()
-        # Use our local variable 'username' instead of 'user.username' to avoid DetachedInstanceError
         return jsonify({'status': 'success', 'user': {'username': username}})
     except Exception as e:
         db.session.rollback()
@@ -203,10 +204,8 @@ def register():
 def login():
     data = request.json
     username_input = data.get('username')
-    # Case-insensitive lookup
     user = User.query.filter(User.username.ilike(username_input)).first()
     if user and (not user.password or user.password == data.get('password')):
-        # Extract data before returning to avoid issues with detached sessions
         user_data = {
             'id': user.id,
             'username': user.username,
@@ -222,7 +221,6 @@ def login():
 @app.route('/api/auth/google', methods=['POST'])
 def google_auth():
     data = request.json
-    # In a production app, you would verify the Google JWT here
     email = data.get('email')
     username = email.split('@')[0]
     
@@ -283,7 +281,6 @@ def add_friend():
     
     if not target: return jsonify({'status': 'error', 'message': 'User not found'}), 404
     
-    # Create notification for target
     notif = Notification(
         user_id=target.id,
         title="Friend Request",
@@ -306,30 +303,23 @@ def accept_friend():
     me_name = data.get('me')
     sender_name = data.get('sender')
     
-    print(f"🤝 Accept friend request: {me_name} accepting {sender_name}")
-    
     me = User.query.filter(User.username.ilike(me_name)).first()
     sender = User.query.filter(User.username.ilike(sender_name)).first()
 
     if not me or not sender:
-        print(f"   ❌ User not found! Me: {me}, Sender: {sender}")
         return jsonify({'status': 'error', 'message': 'User not found'}), 404
 
-    # Check if friendship already exists
     existing = Friendship.query.filter_by(user_id=me.id, friend_id=sender.id).first()
     if not existing:
-        print(f"   ✅ Creating bidirectional friendship records for Users {me.id} and {sender.id}")
         f1 = Friendship(user_id=me.id, friend_id=sender.id, status='accepted')
         f2 = Friendship(user_id=sender.id, friend_id=me.id, status='accepted')
         db.session.add(f1)
         db.session.add(f2)
     else:
-        print(f"   ⚠️ Friendship already exists, updating status to accepted")
         existing.status = 'accepted'
         rev_existing = Friendship.query.filter_by(user_id=sender.id, friend_id=me.id).first()
         if rev_existing: rev_existing.status = 'accepted'
 
-    # Notify sender
     notif = Notification(
         user_id=sender.id,
         title="Request Accepted",
@@ -344,20 +334,16 @@ def accept_friend():
         'message': f"{me.username} accepted your friend request!",
         'target_id': sender.id
     })
-    print(f"   ✅ Friendship committed to DB")
     return jsonify({'status': 'success'})
 
 @app.route('/api/friends', methods=['GET'])
 def get_friends():
     username = request.args.get('username')
-    print(f"👥 Fetching friends for: {username}")
     user = User.query.filter(User.username.ilike(username)).first()
     if not user: 
-        print(f"   ❌ User '{username}' not found")
         return jsonify([])
     
     friendships = Friendship.query.filter_by(user_id=user.id, status='accepted').all()
-    print(f"   🔍 Found {len(friendships)} friendships in DB")
     friends = []
     for f in friendships:
         friend = User.query.get(f.friend_id)
@@ -604,28 +590,17 @@ def handle_disconnect():
 
 @socketio.on('message')
 def handle_message(data):
-    print(f"\n📨 Message received from client {request.sid}")
-    print(f"   Data: {data}")
-    
-    # data expects { 'text': '...', 'sender': 'username', 'receiver': 'username' or None }
     sender = data.get('sender')
     receiver = data.get('receiver')
     text = data.get('text')
     
-    print(f"   Sender: {sender}")
-    print(f"   Receiver: {receiver}")
-    print(f"   Text: {text}")
-    
     if not sender or not text:
-        print("   ❌ Missing sender or text!")
         return
     
     msg = Message(text=text, sender=sender, receiver=receiver)
     db.session.add(msg)
     db.session.commit()
-    print(f"   ✅ Message saved to DB with ID: {msg.id}")
     
-    # Emit to all connected clients
     message_data = {
         'id': msg.id,
         'text': msg.text,
@@ -633,11 +608,8 @@ def handle_message(data):
         'receiver': receiver,
         'timestamp': msg.timestamp.isoformat()
     }
-    print(f"   📤 Broadcasting message to all clients: {message_data}")
     socketio.emit('new_message', message_data)
-    print(f"   ✅ Message broadcasted!")
     
-    # Add notification for receiver if it's a private message
     if receiver:
         rec_user = User.query.filter(User.username.ilike(receiver)).first()
         if rec_user:
@@ -649,7 +621,6 @@ def handle_message(data):
             )
             db.session.add(notif)
             db.session.commit()
-            print(f"   🔔 Notification created for {receiver}")
 
 @app.route('/api/messages', methods=['GET'])
 def get_messages():
@@ -659,7 +630,6 @@ def get_messages():
     if not user1 or not user2:
         return jsonify([])
     
-    # Get messages between two users (both directions)
     messages = Message.query.filter(
         db.or_(
             db.and_(Message.sender == user1, Message.receiver == user2),
@@ -674,6 +644,15 @@ def get_messages():
         'receiver': m.receiver,
         'timestamp': m.timestamp.isoformat()
     } for m in messages])
+
+# Serve Frontend
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
