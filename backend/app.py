@@ -11,8 +11,13 @@ from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
-# Initialize Flask with static folder pointing to the built frontend
-app = Flask(__name__, static_folder='../dist', static_url_path='/')
+# Get the absolute path to the directory where app.py is located
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+# The dist folder is one level up from the backend folder
+dist_dir = os.path.abspath(os.path.join(backend_dir, '..', 'dist'))
+
+# Initialize Flask with the absolute path to the static folder
+app = Flask(__name__, static_folder=dist_dir, static_url_path='/')
 # Robust CORS for development and production
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
@@ -27,14 +32,12 @@ db_url = os.environ.get("DATABASE_URL", DEFAULT_DB_URL)
 # Clean and transform the URL for SQLAlchemy compatibility
 if db_url:
     # Force pg8000 driver for compatibility with Python 3.13 on Render
-    # This avoids the "undefined symbol: _PyInterpreterState_Get" error with psycopg2
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+pg8000://", 1)
     elif db_url.startswith("postgresql://") and "+pg8000" not in db_url:
         db_url = db_url.replace("postgresql://", "postgresql+pg8000://", 1)
     
     # pg8000 does not support 'sslmode' in the connection string.
-    # We must remove it and handle it via connect_args.
     if "sslmode=" in db_url:
         import urllib.parse as urlparse
         url_parts = list(urlparse.urlparse(db_url))
@@ -177,7 +180,7 @@ with app.app_context():
     except Exception as e:
         print(f"❌ Database initialization error: {e}")
 
-# Routes
+# API Routes
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -430,7 +433,7 @@ def manage_habits():
             habit.title = data['title']
             db.session.commit()
             return jsonify({'status': 'success'})
-        return jsonify({'status': 'error'}), 404
+        return jsonify({'error': 'Habit not found'}), 404
 
     if request.method == 'DELETE':
         habit_id = request.args.get('id')
@@ -439,7 +442,7 @@ def manage_habits():
             db.session.delete(habit)
             db.session.commit()
             return jsonify({'status': 'success'})
-        return jsonify({'status': 'error'}), 404
+        return jsonify({'error': 'Habit not found'}), 404
 
     habits = Habit.query.filter_by(user_id=user.id).all()
     return jsonify([{
@@ -645,14 +648,18 @@ def get_messages():
         'timestamp': m.timestamp.isoformat()
     } for m in messages])
 
-# Serve Frontend
+# Serve Frontend - Catch-all route should be last
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
     if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
     else:
-        return send_from_directory(app.static_folder, 'index.html')
+        # Check if index.html exists, if not return a custom message
+        if os.path.exists(os.path.join(app.static_folder, 'index.html')):
+            return send_from_directory(app.static_folder, 'index.html')
+        else:
+            return f"Static folder: {app.static_folder} exists: {os.path.exists(app.static_folder)}. index.html not found.", 404
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
