@@ -26,13 +26,16 @@ db_url = os.environ.get("DATABASE_URL", DEFAULT_DB_URL)
 
 # Clean and transform the URL for SQLAlchemy compatibility
 if db_url:
+    # Force pg8000 driver for compatibility with Python 3.13 on Render
+    # This avoids the "undefined symbol: _PyInterpreterState_Get" error with psycopg2
     if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
+        db_url = db_url.replace("postgres://", "postgresql+pg8000://", 1)
+    elif db_url.startswith("postgresql://") and "+pg8000" not in db_url:
+        db_url = db_url.replace("postgresql://", "postgresql+pg8000://", 1)
     
-    # If the user specifically wants pg8000 or if we're on a system where psycopg2 is missing
-    # we can use +pg8000. But standard postgresql:// uses psycopg2 which is preferred.
-    # We only remove sslmode if using pg8000 as it doesn't support it in the query string.
-    if "+pg8000" in db_url and "sslmode=" in db_url:
+    # pg8000 does not support 'sslmode' in the connection string.
+    # We must remove it and handle it via connect_args.
+    if "sslmode=" in db_url:
         import urllib.parse as urlparse
         url_parts = list(urlparse.urlparse(db_url))
         query = dict(urlparse.parse_qsl(url_parts[4]))
@@ -51,15 +54,12 @@ engine_options = {
     "pool_recycle": 300,
 }
 
-# Special SSL handling for pg8000 if used
-if db_url and "pg8000" in db_url:
+# Always use SSL context for pg8000 when connecting to Supabase
+if "pg8000" in db_url:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     engine_options["connect_args"] = {"ssl_context": ssl_context, "timeout": 30}
-elif db_url and "supabase.co" in db_url and "sslmode=" not in db_url:
-    # If it's Supabase but no sslmode, ensure we at least try to enable it for psycopg2
-    app.config['SQLALCHEMY_DATABASE_URI'] += "?sslmode=require"
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
