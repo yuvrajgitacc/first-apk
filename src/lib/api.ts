@@ -1,6 +1,6 @@
 // Use Render Backend for Production (APK/Deployment), Localhost for Development
 // Forcing Render Backend even in Development to test the live connection
-export const API_URL = "https://flow-state-focus.onrender.com";
+export const API_URL = "https://flow-state-focus-9ufp.onrender.com";
 
 export const authFetch = async (endpoint: string, options: RequestInit = {}) => {
   const token = localStorage.getItem("authToken");
