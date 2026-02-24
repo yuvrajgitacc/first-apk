@@ -13,13 +13,14 @@ import { ProgressDashboard, type ProgressStats, type ProjectProgress } from "@/c
 import { TaskList } from "@/components/tasks/TaskList";
 import { NeuCard } from "@/components/ui/NeuCard";
 import { NeuButton } from "@/components/ui/NeuButton";
+import { Skeleton } from "@/components/ui/skeleton";
 import { NatureBackdrop } from "@/components/habits/NatureBackdrop";
 import { Menu, Bell, User, ClipboardList, PlusCircle, ArrowLeft, ArrowRight, LogOut, Search, X, Paperclip, Camera, Flame, CheckCircle2, Timer, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
-import { cn } from "@/lib/utils";
+import { cn, formatDateLocal } from "@/lib/utils";
 import { initSocket, socket } from "@/lib/socket";
-import { API_URL } from "@/lib/api";
+import { API_URL, authFetch } from "@/lib/api";
 import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell
@@ -136,6 +137,12 @@ const Index = () => {
     const handleXpGain = (data: any) => {
       setXp(data.new_xp);
       setLevel(data.level);
+      toast.success(`+${data.amount} XP Earned!`, {
+        description: data.level_up ? "LEVEL UP! 🌟" : "Keep pushing!",
+        duration: 3000,
+        position: "top-center",
+        icon: <Flame className="w-5 h-5 text-primary animate-bounce" />
+      });
     };
 
     const handleNotification = (data: any) => {
@@ -163,26 +170,10 @@ const Index = () => {
     }
   }, [showProfile, profileData, currentUser]);
 
-  const requiredXP = 3000;
+  const requiredXP = level * 1000;
   const completionRate = Math.round(
     (tasks.filter((t) => t.status === "completed").length / tasks.length) * 100
   );
-
-  const handleCompleteTask = (taskId: string) => {
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskId ? { ...task, status: "completed" as const } : task
-      )
-    );
-    // Add XP for completing task
-    const newXP = xp + 150;
-    if (newXP >= requiredXP) {
-      setLevel((prev) => prev + 1);
-      setXp(newXP - requiredXP);
-    } else {
-      setXp(newXP);
-    }
-  };
 
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [newTask, setNewTask] = useState<Partial<Task>>({
@@ -195,7 +186,7 @@ const Index = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchProfile = (user: string) => {
-    fetch(`${API_URL}/api/user/profile?username=${user}`)
+    authFetch(`/api/user/profile?username=${user}`)
       .then(res => {
         if (!res.ok) throw new Error("Profile not found");
         return res.json();
@@ -219,7 +210,7 @@ const Index = () => {
   };
 
   const fetchTasks = (user: string) => {
-    fetch(`${API_URL}/api/tasks?username=${user}`)
+    authFetch(`/api/tasks?username=${user}`)
       .then(res => res.json())
       .then(data => {
         setTasks(data);
@@ -235,7 +226,7 @@ const Index = () => {
     setFocusHours((prev) => prev + roundedHours);
 
     try {
-      await fetch(`${API_URL}/api/focus/track`, {
+      await authFetch(`/api/focus/track`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hours: roundedHours, username: currentUser }),
@@ -253,7 +244,7 @@ const Index = () => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
 
     try {
-      await fetch(`${API_URL}/api/tasks/${id}`, {
+      await authFetch(`/api/tasks/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -263,15 +254,25 @@ const Index = () => {
     }
   };
 
+  const handleDeleteTask = async (id: string) => {
+    setTasks(prev => prev.filter(t => t.id !== id));
+    try {
+      await authFetch(`/api/tasks/${id}`, { method: 'DELETE' });
+      toast.success("Task deleted");
+    } catch (err) {
+      console.error("Failed to delete task:", err);
+    }
+  };
+
   const fetchNotifications = (user: string) => {
-    fetch(`${API_URL}/api/notifications?username=${user}`)
+    authFetch(`/api/notifications?username=${user}`)
       .then(res => res.json())
       .then(setNotifications);
   };
 
   const handleDeleteNotification = (id: number) => {
     if (!currentUser) return;
-    fetch(`${API_URL}/api/notifications?username=${currentUser}&id=${id}`, {
+    authFetch(`/api/notifications?username=${currentUser}&id=${id}`, {
       method: "DELETE",
     }).then(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
@@ -280,27 +281,27 @@ const Index = () => {
 
   const handleClearAll = () => {
     if (!currentUser) return;
-    // We could add a backend endpoint for this, but for now we'll delete them one by one
-    // Or just add a simple backend route. Let's assume we delete them all.
-    notifications.forEach(n => handleDeleteNotification(n.id));
+    authFetch(`/api/notifications/clear`, { method: "DELETE" })
+      .then(() => setNotifications([]))
+      .catch(err => console.error("Failed to clear notifications:", err));
   };
 
   const fetchHabits = (user: string) => {
-    fetch(`${API_URL}/api/habits?username=${user}`)
+    authFetch(`/api/habits?username=${user}`)
       .then(res => res.json())
       .then(setHabits)
       .catch(err => console.error("Habits fetch error:", err));
   };
 
   const fetchFriends = (user: string) => {
-    fetch(`${API_URL}/api/friends?username=${user}`)
+    authFetch(`/api/friends?username=${user}`)
       .then(res => res.json())
       .then(setFriends)
       .catch(err => console.error("Friends fetch error:", err));
   };
 
   const fetchEvents = (user: string) => {
-    fetch(`${API_URL}/api/events?username=${user}`)
+    authFetch(`/api/events?username=${user}`)
       .then(res => res.json())
       .then(data => {
         const parsedEvents = data.map((e: any) => ({
@@ -330,13 +331,13 @@ const Index = () => {
   useEffect(() => {
     const checkEvents = () => {
       const now = new Date();
-      const todayStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      const todayStr = formatDateLocal(now); // YYYY-MM-DD
       const currentTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
 
       events.forEach(event => {
         // Try to parse the event date. If it's a Date object, convert to string.
         const eventDateStr = event.date instanceof Date
-          ? event.date.toISOString().split('T')[0]
+          ? formatDateLocal(event.date)
           : event.date;
 
         if (eventDateStr === todayStr && event.time === currentTime && !notifiedEvents.current.has(event.id)) {
@@ -348,7 +349,7 @@ const Index = () => {
 
           // Create notification in backend for bell icon
           if (currentUser) {
-            fetch(`${API_URL}/api/notifications/create`, {
+            authFetch(`/api/notifications/create`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -372,7 +373,7 @@ const Index = () => {
   const handleSearchUsers = (q: string) => {
     setSearchQuery(q);
     if (q.length > 2) {
-      fetch(`${API_URL}/api/users/search?q=${q}`)
+      authFetch(`/api/users/search?q=${q}`)
         .then(res => res.json())
         .then(setSearchResults);
     } else {
@@ -381,7 +382,7 @@ const Index = () => {
   };
 
   const handleAddFriend = (target: string) => {
-    fetch(`${API_URL}/api/friends/add`, {
+    authFetch(`/api/friends/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ me: currentUser, target }),
@@ -389,7 +390,7 @@ const Index = () => {
   };
 
   const handleAcceptFriend = (sender: string, notifId: number) => {
-    fetch(`${API_URL}/api/friends/accept`, {
+    authFetch(`/api/friends/accept`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ me: currentUser, sender }),
@@ -415,7 +416,7 @@ const Index = () => {
     // Optimistically update
     setHabits(prev => prev.map(h => h.id === habitId ? { ...h, completion: newCompletion } : h));
 
-    fetch(`${API_URL}/api/habits`, {
+    authFetch(`/api/habits`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: habitId, completion: newCompletion, username: currentUser }),
@@ -441,7 +442,7 @@ const Index = () => {
     setIsHabitDialogOpen(false);
 
     try {
-      const res = await fetch(`${API_URL}/api/habits`, {
+      const res = await authFetch(`/api/habits`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: tempHabit.title, username: currentUser }),
@@ -468,7 +469,7 @@ const Index = () => {
       setHabits(prev => prev.map(h => h.id === editingHabit.id ? { ...h, title: editHabitName } : h));
       setIsEditHabitDialogOpen(false);
 
-      const res = await fetch(`${API_URL}/api/habits`, {
+      const res = await authFetch(`/api/habits`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: editingHabit.id, title: editHabitName, username: currentUser }),
@@ -491,7 +492,7 @@ const Index = () => {
       // Optimistic update
       setHabits(prev => prev.filter(h => h.id !== habitId));
 
-      const res = await fetch(`${API_URL}/api/habits?username=${currentUser}&id=${habitId}`, {
+      const res = await authFetch(`/api/habits?username=${currentUser}&id=${habitId}`, {
         method: 'DELETE',
       });
       if (res.ok) {
@@ -509,7 +510,7 @@ const Index = () => {
     if (!currentUser) return;
     setTasks([task, ...tasks]);
     try {
-      await fetch(`${API_URL}/api/tasks?username=${currentUser}`, {
+      await authFetch(`/api/tasks?username=${currentUser}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(task),
@@ -528,7 +529,7 @@ const Index = () => {
 
   const fetchFriendProfile = async (friendId: string) => {
     try {
-      const res = await fetch(`${API_URL}/api/user/profile?user=${friendId}`);
+      const res = await authFetch(`/api/user/profile?user=${friendId}`);
       const data = await res.json();
       setFriendProfileData(data);
     } catch (err) {
@@ -555,6 +556,26 @@ const Index = () => {
 
     switch (activeTab) {
       case "home":
+        if (isLoading) {
+          return (
+            <div className="space-y-6 animate-pulse">
+              <div className="flex items-center justify-between">
+                <Skeleton className="h-8 w-24 rounded-xl" />
+                <div className="flex gap-2">
+                  <Skeleton className="h-10 w-10 rounded-xl" />
+                  <Skeleton className="h-10 w-10 rounded-xl" />
+                </div>
+              </div>
+              <Skeleton className="h-32 w-full rounded-3xl" />
+              <Skeleton className="h-48 w-full rounded-3xl" />
+              <div className="grid grid-cols-2 gap-4">
+                <Skeleton className="h-24 rounded-2xl" />
+                <Skeleton className="h-24 rounded-2xl" />
+              </div>
+              <Skeleton className="h-64 w-full rounded-3xl" />
+            </div>
+          );
+        }
         return (
           <div className="space-y-6 animate-scale-in">
             <div className="flex items-center justify-between">
@@ -604,7 +625,7 @@ const Index = () => {
                                   className="h-7 text-xs"
                                   onClick={() => {
                                     // Extract sender name from message "Name sent you..."
-                                    const sender = n.message.split(' ')[0];
+                                    const sender = n.sender;
                                     handleAcceptFriend(sender, n.id);
                                   }}
                                 >
@@ -665,6 +686,7 @@ const Index = () => {
               tasks={tasks}
               onAddTask={() => setIsTaskDialogOpen(true)}
               onUpdateTask={handleUpdateTask}
+              onDeleteTask={handleDeleteTask}
             />
           </div>
         );
@@ -695,10 +717,10 @@ const Index = () => {
                 // For the backend, we send a string
                 const backendEvent = {
                   ...uiEvent,
-                  date: uiEvent.date.toISOString().split('T')[0]
+                  date: formatDateLocal(uiEvent.date)
                 };
 
-                fetch(`http://127.0.0.1:5000/api/events?username=${currentUser}`, {
+                authFetch(`/api/events?username=${currentUser}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(backendEvent),
@@ -719,6 +741,7 @@ const Index = () => {
               tasks={tasks}
               onAddTask={() => setIsTaskDialogOpen(true)}
               onUpdateTask={handleUpdateTask}
+              onDeleteTask={handleDeleteTask}
             />
           </div>
         );
@@ -1138,23 +1161,38 @@ const Index = () => {
             <div className="space-y-3">
               <h3 className="font-bold text-lg">Theme Color</h3>
               <div className="flex flex-wrap gap-4">
-                {['default', 'red', 'green', 'blue', 'mirage'].map(t => (
-                  <button
-                    key={t}
-                    onClick={() => handleThemeChange(t)}
-                    className={cn(
-                      "w-12 h-12 rounded-full border-4 transition-all shadow-lg relative",
-                      theme === t ? "border-primary scale-110" : "border-transparent opacity-70 hover:opacity-100",
-                      t === 'default' && "bg-[#F97316]",
-                      t === 'red' && "bg-red-500",
-                      t === 'green' && "bg-green-600",
-                      t === 'blue' && "bg-blue-500",
-                      t === 'mirage' && "bg-[#141E30]"
-                    )}
-                  >
-                    {t === 'mirage' && <span className="absolute inset-0 flex items-center justify-center text-[7px] text-white font-black uppercase text-center leading-tight">Navy<br />Mirage</span>}
-                  </button>
-                ))}
+                {[
+                  { id: 'default', level: 1, color: '#F97316', label: 'Orange' },
+                  { id: 'red', level: 3, color: '#EF4444', label: 'Red' },
+                  { id: 'green', level: 3, color: '#16A34A', label: 'Green' },
+                  { id: 'blue', level: 5, color: '#3B82F6', label: 'Blue' },
+                  { id: 'mirage', level: 10, color: '#141E30', label: 'Mirage' }
+                ].map(t => {
+                  const isLocked = (profileData.level || 1) < t.level;
+                  return (
+                    <div key={t.id} className="flex flex-col items-center gap-1">
+                      <button
+                        onClick={() => {
+                          if (isLocked) {
+                            toast.error(`Unlock this at Level ${t.level}!`);
+                            return;
+                          }
+                          handleThemeChange(t.id);
+                        }}
+                        className={cn(
+                          "w-12 h-12 rounded-full border-4 transition-all shadow-lg relative flex items-center justify-center",
+                          theme === t.id ? "border-primary scale-110" : "border-transparent opacity-70 hover:opacity-100",
+                          isLocked && "grayscale cursor-not-allowed"
+                        )}
+                        style={{ backgroundColor: t.color }}
+                      >
+                        {isLocked && <Lock className="w-4 h-4 text-white/50" />}
+                        {t.id === 'mirage' && !isLocked && <span className="absolute inset-0 flex items-center justify-center text-[7px] text-white font-black uppercase text-center leading-tight">Navy<br />Mirage</span>}
+                      </button>
+                      <span className="text-[10px] font-bold uppercase opacity-50">{isLocked ? `Lvl ${t.level}` : t.label}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -1206,6 +1244,27 @@ const Index = () => {
                 <span className="font-medium">Edit Profile</span>
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   Change Name <ArrowRight className="w-3 h-3" />
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  const url = prompt("Enter an Avatar image URL:");
+                  if (url) {
+                    authFetch("/api/user/update", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ profilePic: url }),
+                    }).then(() => {
+                      setProfileData(prev => ({ ...prev, profilePic: url }));
+                      toast.success("Avatar updated!");
+                    });
+                  }
+                }}
+                className="w-full p-4 flex items-center justify-between hover:bg-muted/5 transition-colors border-b border-border/50"
+              >
+                <span className="font-medium">Change Avatar</span>
+                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                  Image URL <ArrowRight className="w-3 h-3" />
                 </span>
               </button>
               <div className="w-full p-4 flex items-center justify-between border-b border-border/50">
@@ -1334,7 +1393,7 @@ const Index = () => {
       uiStyle === 'glass' ? "bg-transparent" : "bg-background"
     )}>
       <div className={cn(
-        "h-full w-full max-w-md mx-auto flex flex-col relative",
+        "h-full w-full md:max-w-2xl lg:max-w-4xl mx-auto flex flex-col relative",
         !chatFriend && "px-4 pt-6 pb-28 overflow-y-auto"
       )}>
         {renderContent()}

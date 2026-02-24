@@ -10,11 +10,26 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Get the absolute path to the directory where app.py is located
 backend_dir = os.path.dirname(os.path.abspath(__file__))
-# The dist folder is one level up from the backend folder
-dist_dir = os.path.abspath(os.path.join(backend_dir, '..', 'dist'))
+# Try to find the dist folder in a few likely locations
+possible_dist_paths = [
+    os.path.abspath(os.path.join(backend_dir, '..', 'dist')),
+    os.path.abspath(os.path.join(backend_dir, 'dist')),
+    '/opt/render/project/src/dist'
+]
+
+dist_dir = possible_dist_paths[0]
+for path in possible_dist_paths:
+    if os.path.exists(path) and os.path.isdir(path):
+        dist_dir = path
+        break
 
 # Initialize Flask with the absolute path to the static folder
 app = Flask(__name__, static_folder=dist_dir, static_url_path='/')
@@ -25,44 +40,21 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Database Configuration
-# Use environment variable for production, fallback to hardcoded only for local/dev
-DEFAULT_DB_URL = "postgresql://postgres:yuvrajsupapassword@db.phujsimyxqvfbxjswrvg.supabase.co:5432/postgres?sslmode=require"
-db_url = os.environ.get("DATABASE_URL", DEFAULT_DB_URL)
-
-# Clean and transform the URL for SQLAlchemy compatibility
-if db_url:
-    # Force pg8000 driver for compatibility with Python 3.13 on Render
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql+pg8000://", 1)
-    elif db_url.startswith("postgresql://") and "+pg8000" not in db_url:
-        db_url = db_url.replace("postgresql://", "postgresql+pg8000://", 1)
-    
-    # pg8000 does not support 'sslmode' in the connection string.
-    if "sslmode=" in db_url:
-        import urllib.parse as urlparse
-        url_parts = list(urlparse.urlparse(db_url))
-        query = dict(urlparse.parse_qsl(url_parts[4]))
-        if 'sslmode' in query:
-            del query['sslmode']
-        url_parts[4] = urlparse.urlencode(query)
-        db_url = urlparse.urlunparse(url_parts)
-
-app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+# Using SQLite for local development
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", 'sqlite:///flowstate.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-123')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-jwt-key')
+jwt = JWTManager(app)
 
 # Robust Engine Options
 engine_options = {
     "pool_pre_ping": True,
     "pool_recycle": 300,
+    "connect_args": {
+        "connect_timeout": 10
+    }
 }
-
-# Always use SSL context for pg8000 when connecting to Supabase
-if "pg8000" in db_url:
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    engine_options["connect_args"] = {"ssl_context": ssl_context, "timeout": 30}
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
@@ -144,6 +136,7 @@ class Friendship(db.Model):
 class Notification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    sender_username = db.Column(db.String(80)) # Added to fix brittle logic
     title = db.Column(db.String(100))
     message = db.Column(db.String(200))
     type = db.Column(db.String(20)) # friend_request, achievement, mission
@@ -173,12 +166,31 @@ def add_xp(user, amount):
 with app.app_context():
     try:
         db.create_all()
+        # Enable WAL mode for SQLite
+        if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
+            with db.engine.connect() as conn:
+                conn.execute(text("PRAGMA journal_mode=WAL"))
         # Create default user if it doesn't exist
         if not User.query.filter(User.username.ilike('Yuvraj')).first():
             db.session.add(User(username='Yuvraj', daily_stats='{}'))
             db.session.commit()
     except Exception as e:
-        print(f"❌ Database initialization error: {e}")
+        print(f"Database initialization error: {e}")
+
+def reset_weekly_habits():
+    with app.app_context():
+        habits = Habit.query.all()
+        for h in habits:
+            if h.weekly_completion == '1111111':
+                h.streak += 1
+            else:
+                h.streak = 0
+            h.weekly_completion = '0000000'
+        db.session.commit()
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=reset_weekly_habits, trigger="cron", day_of_week='sun', hour=0, minute=0)
+scheduler.start()
 
 # API Routes
 
@@ -189,10 +201,11 @@ def register():
     if User.query.filter_by(username=username).first():
         return jsonify({'status': 'error', 'message': 'Username already exists'}), 400
     
+    hashed_pw = generate_password_hash(data.get('password'), method='pbkdf2:sha256')
     user = User(
         username=username,
         email=data.get('email'),
-        password=data.get('password'),
+        password=hashed_pw,
         daily_stats='{}'
     )
     try:
@@ -208,12 +221,26 @@ def login():
     data = request.json
     username_input = data.get('username')
     user = User.query.filter(User.username.ilike(username_input)).first()
-    if user and (not user.password or user.password == data.get('password')):
+    
+    is_valid_pw = False
+    if user:
+        if not user.password:
+            is_valid_pw = True
+        elif user.password == data.get('password'):
+            is_valid_pw = True
+            user.password = generate_password_hash(data.get('password'), method='pbkdf2:sha256')
+            db.session.commit()
+        else:
+            is_valid_pw = check_password_hash(user.password, data.get('password'))
+
+    if user and is_valid_pw:
+        access_token = create_access_token(identity=user.username)
         user_data = {
             'id': user.id,
             'username': user.username,
             'level': user.level,
-            'xp': user.xp
+            'xp': user.xp,
+            'token': access_token
         }
         return jsonify({
             'status': 'success',
@@ -224,29 +251,46 @@ def login():
 @app.route('/api/auth/google', methods=['POST'])
 def google_auth():
     data = request.json
-    email = data.get('email')
-    username = email.split('@')[0]
-    
-    user = User.query.filter(User.email.ilike(email)).first()
-    if not user:
-        user = User(username=username, email=email, daily_stats='{}')
-        db.session.add(user)
-        db.session.commit()
-    
-    return jsonify({
-        'status': 'success',
-        'user': {
-            'id': user.id,
-            'username': user.username,
-            'level': user.level,
-            'xp': user.xp
-        }
-    })
+    token = data.get('credential')
+    try:
+        # Verify the Google token
+        CLIENT_ID = "765015665790-79inqu25trcn7i8kmd4dq3n4rsse2j5a.apps.googleusercontent.com"
+        idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), CLIENT_ID)
+        email = idinfo['email']
+        username = email.split('@')[0]
+        
+        user = User.query.filter(User.email.ilike(email)).first()
+        if not user:
+            user = User(username=username, email=email, daily_stats='{}')
+            db.session.add(user)
+            db.session.commit()
+        
+        access_token = create_access_token(identity=user.username)
+        return jsonify({
+            'status': 'success',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'level': user.level,
+                'xp': user.xp,
+                'token': access_token
+            }
+        })
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Invalid Google token'}), 401
 
 @app.route('/api/user/profile', methods=['GET'])
+@jwt_required(optional=True)
 def get_profile():
-    username = request.args.get('username')
-    user = User.query.filter(User.username.ilike(username)).first() if username else User.query.first()
+    # Allow fetching other profiles by user param, fallback to jwt identity
+    target_user = request.args.get('user') or request.args.get('username')
+    identity = get_jwt_identity()
+    
+    username = target_user or identity
+    if not username:
+        return jsonify({'status': 'error', 'message': 'No username provided'}), 400
+        
+    user = User.query.filter(User.username.ilike(username)).first()
     if not user:
          return jsonify({'status': 'error', 'message': 'User not found'}), 404
     return jsonify({
@@ -260,9 +304,10 @@ def get_profile():
     })
 
 @app.route('/api/user/update', methods=['POST'])
+@jwt_required()
 def update_profile():
     data = request.json
-    username = data.get('username')
+    username = get_jwt_identity()
     user = User.query.filter_by(username=username).first()
     if user:
         if 'profilePic' in data: user.profile_pic = data['profilePic']
@@ -277,15 +322,20 @@ def search_users():
     return jsonify([{'username': u.username, 'id': u.id} for u in users])
 
 @app.route('/api/friends/add', methods=['POST'])
+@jwt_required()
 def add_friend():
     data = request.json
-    me = User.query.filter(User.username.ilike(data['me'])).first()
-    target = User.query.filter(User.username.ilike(data['target'])).first()
+    me_name = get_jwt_identity()
+    target_name = data.get('target')
+    
+    me = User.query.filter(User.username.ilike(me_name)).first()
+    target = User.query.filter(User.username.ilike(target_name)).first()
     
     if not target: return jsonify({'status': 'error', 'message': 'User not found'}), 404
     
     notif = Notification(
         user_id=target.id,
+        sender_username=me.username,
         title="Friend Request",
         message=f"{me.username} sent you a friend request!",
         type="friend_request"
@@ -301,9 +351,10 @@ def add_friend():
     return jsonify({'status': 'success'})
 
 @app.route('/api/friends/accept', methods=['POST'])
+@jwt_required()
 def accept_friend():
     data = request.json
-    me_name = data.get('me')
+    me_name = get_jwt_identity()
     sender_name = data.get('sender')
     
     me = User.query.filter(User.username.ilike(me_name)).first()
@@ -325,6 +376,7 @@ def accept_friend():
 
     notif = Notification(
         user_id=sender.id,
+        sender_username=me.username,
         title="Request Accepted",
         message=f"{me.username} accepted your friend request!",
         type="info"
@@ -340,8 +392,9 @@ def accept_friend():
     return jsonify({'status': 'success'})
 
 @app.route('/api/friends', methods=['GET'])
+@jwt_required()
 def get_friends():
-    username = request.args.get('username')
+    username = get_jwt_identity()
     user = User.query.filter(User.username.ilike(username)).first()
     if not user: 
         return jsonify([])
@@ -361,8 +414,9 @@ def get_friends():
     return jsonify(friends)
 
 @app.route('/api/notifications', methods=['GET', 'DELETE'])
+@jwt_required()
 def handle_notifications():
-    username = request.args.get('username')
+    username = get_jwt_identity()
     user = User.query.filter(User.username.ilike(username)).first()
     if not user: return jsonify([])
 
@@ -380,10 +434,22 @@ def handle_notifications():
         'id': n.id,
         'title': n.title,
         'message': n.message,
+        'sender': n.sender_username,
         'type': n.type,
         'read': n.read,
         'time': n.timestamp.strftime('%H:%M')
     } for n in notifs])
+
+@app.route('/api/notifications/clear', methods=['DELETE'])
+@jwt_required()
+def clear_notifications():
+    username = get_jwt_identity()
+    user = User.query.filter(User.username.ilike(username)).first()
+    if not user: return jsonify({'status': 'error'}), 404
+    
+    Notification.query.filter_by(user_id=user.id).delete()
+    db.session.commit()
+    return jsonify({'status': 'success'})
 
 @app.route('/api/notifications/create', methods=['POST'])
 def create_notification():
@@ -404,10 +470,10 @@ def create_notification():
     return jsonify({'status': 'success', 'id': notif.id})
 
 @app.route('/api/habits', methods=['GET', 'POST', 'PATCH', 'PUT', 'DELETE'])
+@jwt_required()
 def manage_habits():
-    data = request.json if request.is_json else {}
-    username = request.args.get('username') or data.get('username')
-    user = User.query.filter(User.username.ilike(username)).first() if username else None
+    username = get_jwt_identity()
+    user = User.query.filter(User.username.ilike(username)).first()
     if not user: return jsonify({'error': 'User not found'}), 404
 
     if request.method == 'POST':
@@ -453,12 +519,13 @@ def manage_habits():
     } for h in habits])
 
 @app.route('/api/focus/track', methods=['POST'])
+@jwt_required()
 def track_focus():
     data = request.json
     hours = float(data.get('hours', 0))
-    username = data.get('username')
+    username = get_jwt_identity()
     date_str = datetime.now().strftime('%Y-%m-%d')
-    user = User.query.filter(User.username.ilike(username)).first() if username else None
+    user = User.query.filter(User.username.ilike(username)).first()
     
     if user:
         try:
@@ -471,9 +538,11 @@ def track_focus():
     return jsonify({'status': 'error', 'message': 'User not found'}), 404
 
 @app.route('/api/tasks', methods=['GET', 'POST'])
+@jwt_required()
 def handle_tasks():
-    username = request.args.get('username')
-    user = User.query.filter(User.username.ilike(username)).first() if username else None
+    username = get_jwt_identity()
+    user = User.query.filter(User.username.ilike(username)).first()
+    if not user: return jsonify({'error': 'User not found'}), 404
     
     if request.method == 'POST':
         data = request.json
@@ -484,7 +553,7 @@ def handle_tasks():
             priority=data.get('priority', 'normal'),
             total_hours=data.get('totalHours', 1),
             status='todo',
-            user_id=user.id if user else None
+            user_id=user.id
         )
         try:
             db.session.add(new_task)
@@ -494,7 +563,7 @@ def handle_tasks():
             db.session.rollback()
             return jsonify({'status': 'error'}), 500
     
-    tasks = Task.query.filter_by(user_id=user.id).all() if user else Task.query.all()
+    tasks = Task.query.filter_by(user_id=user.id).all()
     output = []
     for task in tasks:
         subtasks = SubTask.query.filter_by(task_id=task.id).all()
@@ -510,16 +579,32 @@ def handle_tasks():
         })
     return jsonify(output)
 
-@app.route('/api/tasks/<task_id>', methods=['PATCH'])
+@app.route('/api/tasks/<task_id>', methods=['PATCH', 'DELETE'])
+@jwt_required()
 def update_task(task_id):
     task = Task.query.get_or_404(task_id)
+    username = get_jwt_identity()
+    user = User.query.filter(User.username.ilike(username)).first()
+    
+    if not user or task.user_id != user.id:
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+
+    if request.method == 'DELETE':
+        SubTask.query.filter_by(task_id=task.id).delete()
+        db.session.delete(task)
+        db.session.commit()
+        return jsonify({'status': 'success'})
+
     data = request.json
+    
+    if 'title' in data: task.title = data['title']
+    if 'description' in data: task.description = data['description']
+    if 'priority' in data: task.priority = data['priority']
     
     if 'status' in data:
         old_status = task.status
         task.status = data['status']
         if task.status == 'completed' and old_status != 'completed':
-            user = User.query.first()
             level_up = add_xp(user, 150)
             db.session.commit()
             
@@ -533,7 +618,8 @@ def update_task(task_id):
             socketio.emit('notification', {
                 'title': 'Mission Accomplished!',
                 'message': f'You earned 150 XP for completing "{task.title}"',
-                'type': 'success'
+                'type': 'success',
+                'target_id': user.id
             })
 
     if 'subtasks' in data:
@@ -546,8 +632,9 @@ def update_task(task_id):
     return jsonify({'status': 'success'})
 
 @app.route('/api/events', methods=['GET', 'POST', 'DELETE'])
+@jwt_required()
 def manage_events():
-    username = request.args.get('username')
+    username = get_jwt_identity()
     user = User.query.filter(User.username.ilike(username)).first()
     if not user: return jsonify([])
 
@@ -584,12 +671,12 @@ def manage_events():
     } for e in events])
 
 @socketio.on('connect')
-def handle_connect():
-    print(f"✅ Client connected: {request.sid}")
+def handle_connect(auth=None):
+    print(f"Client connected: {request.sid}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print(f"❌ Client disconnected: {request.sid}")
+    print(f"Client disconnected: {request.sid}")
 
 @socketio.on('message')
 def handle_message(data):
@@ -618,6 +705,7 @@ def handle_message(data):
         if rec_user:
             notif = Notification(
                 user_id=rec_user.id,
+                sender_username=sender,
                 title="New Message",
                 message=f"You received a new message from {sender}",
                 type="message"
@@ -626,8 +714,9 @@ def handle_message(data):
             db.session.commit()
 
 @app.route('/api/messages', methods=['GET'])
+@jwt_required()
 def get_messages():
-    user1 = request.args.get('user1')
+    user1 = get_jwt_identity()
     user2 = request.args.get('user2')
     
     if not user1 or not user2:

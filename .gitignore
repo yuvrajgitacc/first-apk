@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python and DB ignores
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.db
+instance/
+backend/.venv/
+.venv/
+.env
+.env.*

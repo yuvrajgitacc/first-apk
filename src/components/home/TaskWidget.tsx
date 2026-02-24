@@ -2,9 +2,13 @@ import { useState } from "react";
 import { NeuCard } from "@/components/ui/NeuCard";
 import { NeuButton } from "@/components/ui/NeuButton";
 import { ProgressBar } from "@/components/ui/ProgressBar";
-import { Clock, Users, Plus, CheckCircle2, Circle, ChevronDown, ChevronUp } from "lucide-react";
+import { Clock, Users, Plus, CheckCircle2, Circle, ChevronDown, ChevronUp, MoreVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface SubTask {
   id: string;
@@ -28,6 +32,7 @@ interface TaskWidgetProps {
   tasks: Task[];
   onAddTask: () => void;
   onUpdateTask?: (taskId: string, updates: Partial<Task>) => void;
+  onDeleteTask?: (taskId: string) => void;
 }
 
 const priorityColors = {
@@ -42,9 +47,29 @@ const priorityLabels = {
   low: "Low",
 };
 
-const TaskWidget = ({ tasks, onAddTask, onUpdateTask }: TaskWidgetProps) => {
+const TaskWidget = ({ tasks, onAddTask, onUpdateTask, onDeleteTask }: TaskWidgetProps) => {
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+
+  const handleEditClick = (task: Task) => {
+    setEditingTask(task);
+    setIsEditDialogOpen(true);
+  };
+
+  const handleSaveEdit = () => {
+    if (editingTask && onUpdateTask) {
+      onUpdateTask(editingTask.id, {
+        title: editingTask.title,
+        description: editingTask.description,
+        priority: editingTask.priority,
+        totalHours: editingTask.totalHours
+      });
+      setIsEditDialogOpen(false);
+      setEditingTask(null);
+    }
+  };
 
   const toggleTask = (taskId: string) => {
     setExpandedTaskId(expandedTaskId === taskId ? null : taskId);
@@ -122,7 +147,7 @@ const TaskWidget = ({ tasks, onAddTask, onUpdateTask }: TaskWidgetProps) => {
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <NeuButton
                     size="icon"
                     variant="icon"
@@ -138,7 +163,31 @@ const TaskWidget = ({ tasks, onAddTask, onUpdateTask }: TaskWidgetProps) => {
                       <Circle className="w-5 h-5 text-muted-foreground" />
                     )}
                   </NeuButton>
-                  {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <NeuButton size="icon" variant="icon" className="p-1" onClick={(e) => e.stopPropagation()}>
+                        <MoreVertical className="w-4 h-4" />
+                      </NeuButton>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40 bg-background border-border shadow-xl">
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleEditClick(task); }}>
+                        Edit Task
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onUpdateTask?.(task.id, { status: 'todo' }); }}>
+                        Mark To Do
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onUpdateTask?.(task.id, { status: 'inProgress' }); }}>
+                        Mark In Progress
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onUpdateTask?.(task.id, { status: 'completed' }); }}>
+                        Mark Completed
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); onDeleteTask?.(task.id); }}>
+                        Delete Task
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {isExpanded ? <ChevronUp className="w-4 h-4 ml-1" /> : <ChevronDown className="w-4 h-4 ml-1" />}
                 </div>
               </div>
 
@@ -199,6 +248,73 @@ const TaskWidget = ({ tasks, onAddTask, onUpdateTask }: TaskWidgetProps) => {
           );
         })}
       </div>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[425px] bg-background border-none shadow-2xl rounded-3xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold flex items-center gap-2">
+              Edit Task
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-6 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-muted-foreground px-1">TASK TITLE</label>
+              <Input
+                placeholder="Task title"
+                value={editingTask?.title || ""}
+                onChange={(e) => setEditingTask(prev => prev ? ({ ...prev, title: e.target.value }) : null)}
+                className="neu-pressed bg-background border-none h-12 rounded-2xl focus-visible:ring-1 focus-visible:ring-primary"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-muted-foreground px-1">DESCRIPTION</label>
+              <Input
+                placeholder="Description"
+                value={editingTask?.description || ""}
+                onChange={(e) => setEditingTask(prev => prev ? ({ ...prev, description: e.target.value }) : null)}
+                className="neu-pressed bg-background border-none h-12 rounded-2xl focus-visible:ring-1 focus-visible:ring-primary"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-muted-foreground px-1">PRIORITY</label>
+                <Select
+                  value={editingTask?.priority}
+                  onValueChange={(v: any) => setEditingTask(prev => prev ? ({ ...prev, priority: v }) : null)}
+                >
+                  <SelectTrigger className="neu-pressed bg-background border-none h-12 rounded-2xl">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-background border-border rounded-xl">
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="normal">Normal</SelectItem>
+                    <SelectItem value="urgent">Urgent</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-muted-foreground px-1">TOTAL HOURS</label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={editingTask?.totalHours || 1}
+                  onChange={(e) => setEditingTask(prev => prev ? ({ ...prev, totalHours: parseInt(e.target.value) || 1 }) : null)}
+                  className="neu-pressed bg-background border-none h-12 rounded-2xl focus-visible:ring-1 focus-visible:ring-primary"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="pt-4">
+            <NeuButton
+              className="w-full h-12 text-lg font-bold"
+              variant="primary"
+              onClick={handleSaveEdit}
+            >
+              Save Changes
+            </NeuButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

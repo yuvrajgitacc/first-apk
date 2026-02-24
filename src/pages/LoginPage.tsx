@@ -36,11 +36,12 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
             const res = await fetch(`${API_URL}/api/auth/google`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: payload.email }),
+                body: JSON.stringify({ credential: credentialResponse.credential }),
             });
             const data = await res.json();
             if (data.status === "success") {
                 toast.success(`Welcome, ${data.user.username}!`);
+                localStorage.setItem("authToken", data.user.token);
                 onLogin(data.user.username);
             }
         } catch (err) {
@@ -85,6 +86,7 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
             if (data.status === "success") {
                 toast.success(mode === "login" ? `Welcome back, ${username}!` : "Registration successful! Please login.");
                 if (mode === "login") {
+                    localStorage.setItem("authToken", data.user.token);
                     onLogin(username);
                 } else {
                     setMode("login");

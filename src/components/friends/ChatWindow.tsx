@@ -3,7 +3,7 @@ import { NeuButton } from "@/components/ui/NeuButton";
 import { ArrowLeft, Send, Smile, Paperclip } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { socket } from "@/lib/socket";
-import { API_URL } from "@/lib/api";
+import { API_URL, authFetch } from "@/lib/api";
 
 interface Message {
   id: string;
@@ -66,7 +66,7 @@ const ChatWindow = ({
   useEffect(() => {
     if (currentUser && friendName) {
       console.log(`📥 Fetching chat history between ${currentUser} and ${friendName}`);
-      fetch(`${API_URL}/api/messages?user1=${currentUser}&user2=${friendName}`)
+      authFetch(`/api/messages?user1=${currentUser}&user2=${friendName}`)
         .then((res) => res.json())
         .then((data) => {
           const parsedMessages = data.map((msg: any) => ({

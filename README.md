@@ -60,9 +60,26 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
-## How can I deploy this project?
+## Deployment on Render
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+This project is set up to be deployed as a monolithic application on Render using Docker.
+
+### Steps to Deploy:
+
+1. **Create a new Web Service** on Render and connect your repository.
+2. **Environment**: Select **Docker**.
+3. **Region**: Choose the region closest to your database (Supabase).
+4. **Environment Variables**:
+   - `DATABASE_URL`: Your Supabase PostgreSQL connection string (e.g., `postgresql://postgres:password@db.xxxx.supabase.co:5432/postgres`).
+   - `SECRET_KEY`: A random string for Flask security.
+5. **Render will automatically build** the React frontend and the Python backend using the provided `Dockerfile`.
+
+### Database Troubleshooting:
+
+If you encounter connection timeouts:
+- Ensure your Supabase database is not paused.
+- Check that `sslmode=require` is included in your connection string if not handled automatically.
+- The app now uses `psycopg2` which is more robust for Render-to-Supabase connections.
 
 ## Can I connect a custom domain to my Lovable project?
 
