@@ -675,8 +675,8 @@ def handle_connect(auth=None):
     print(f"Client connected: {request.sid}")
 
 @socketio.on('disconnect')
-def handle_disconnect():
-    print(f"Client disconnected: {request.sid}")
+def handle_disconnect(reason=None):
+    print(f"Client disconnected: {request.sid} (Reason: {reason})")
 
 @socketio.on('message')
 def handle_message(data):
