@@ -11,5 +11,6 @@ pg8000
 Flask-JWT-Extended
 werkzeug
 google-auth
+requests
 APScheduler
 
