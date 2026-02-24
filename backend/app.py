@@ -40,23 +40,11 @@ CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Database Configuration
-# Using SQLite for local development
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", 'sqlite:///flowstate.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-123')
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-jwt-key')
 jwt = JWTManager(app)
-
-# Robust Engine Options
-engine_options = {
-    "pool_pre_ping": True,
-    "pool_recycle": 300,
-    "connect_args": {
-        "connect_timeout": 10
-    }
-}
-
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
 db = SQLAlchemy(app)
 
